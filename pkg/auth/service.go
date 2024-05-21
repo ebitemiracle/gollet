@@ -145,7 +145,7 @@ func UserLogin(c *gin.Context) {
 	// Query the database to fetch the user details
 	var storedUser User
 	var storedPassword string
-	row := db.QueryRow(context.Background(), "SELECT user_id, fullname, email, phone, password, deleted FROM gollet WHERE email = $1 AND deleted = false LIMIT 1", newUser.Email)
+	row := db.QueryRow(context.Background(), "SELECT user_id, fullname, email, phone, password, deleted FROM users WHERE email = $1 AND deleted = false LIMIT 1", newUser.Email)
 	err = row.Scan(&storedUser.ID, &storedUser.Fullname, &storedUser.Email, &storedUser.Phone, &storedPassword, &storedUser.Deleted)
 	if err != nil {
 		response.Status = "error"
@@ -220,7 +220,7 @@ func UserResetPassword(c *gin.Context) {
 
 	// Query the database to verify the previous password
 	var storedPassword string
-	err = db.QueryRow(context.Background(), "SELECT password FROM gollet WHERE email = $1 AND user_id = $2 AND deleted = false", request.Email, request.ID).Scan(&storedPassword)
+	err = db.QueryRow(context.Background(), "SELECT password FROM users WHERE email = $1 AND user_id = $2 AND deleted = false", request.Email, request.ID).Scan(&storedPassword)
 	if err != nil {
 		response.Status = "error"
 		response.StatusCode = http.StatusNotFound
@@ -250,7 +250,7 @@ func UserResetPassword(c *gin.Context) {
 	}
 
 	// Update the password in the database
-	_, err = db.Exec(context.Background(), "UPDATE gollet SET password = $1 WHERE user_id = $2", hashedNewPassword, request.ID)
+	_, err = db.Exec(context.Background(), "UPDATE users SET password = $1 WHERE user_id = $2", hashedNewPassword, request.ID)
 	if err != nil {
 		response.Status = "error"
 		response.StatusCode = http.StatusInternalServerError
@@ -284,7 +284,7 @@ func ForgotPassword(c *gin.Context) {
 
 	var user User
 	if request.Email != "" {
-		err = db.QueryRow(context.Background(), "SELECT user_id, email FROM gollet WHERE email = $1 AND deleted = false", request.Email).Scan(&user.ID, &user.Email)
+		err = db.QueryRow(context.Background(), "SELECT user_id, email FROM users WHERE email = $1 AND deleted = false", request.Email).Scan(&user.ID, &user.Email)
 	}
 
 	if err != nil {
@@ -296,7 +296,7 @@ func ForgotPassword(c *gin.Context) {
 	}
 
 	pin := generateRandomPIN()
-	_, err = db.Exec(context.Background(), "UPDATE gollet SET reset_pin = $1, reset_pin_expiry = $2, pin_used = FALSE WHERE user_id = $3", pin, time.Now().Add(15*time.Minute), user.ID)
+	_, err = db.Exec(context.Background(), "UPDATE users SET reset_pin = $1, reset_pin_expiry = $2, pin_used = FALSE WHERE user_id = $3", pin, time.Now().Add(15*time.Minute), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to save PIN"})
 		return
@@ -335,7 +335,7 @@ func VerifyPin(c *gin.Context) {
 	var expiry time.Time
 	var pinUsed bool
 
-	err = db.QueryRow(context.Background(), "SELECT reset_pin, reset_pin_expiry, pin_used FROM gollet WHERE email = $1 AND user_id = $2", request.Email, request.UserID).Scan(&storedPin, &expiry, &pinUsed)
+	err = db.QueryRow(context.Background(), "SELECT reset_pin, reset_pin_expiry, pin_used FROM users WHERE email = $1 AND user_id = $2", request.Email, request.UserID).Scan(&storedPin, &expiry, &pinUsed)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "User not found. Reason: " + err.Error()})
 		return
@@ -357,7 +357,7 @@ func VerifyPin(c *gin.Context) {
 		return
 	}
 
-	_, err = db.Exec(context.Background(), "UPDATE gollet SET password = $1, reset_pin = '', pin_used = TRUE WHERE user_id = $2", hashedPassword, request.UserID)
+	_, err = db.Exec(context.Background(), "UPDATE users SET password = $1, reset_pin = '', pin_used = TRUE WHERE user_id = $2", hashedPassword, request.UserID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to update password. Reason: " + err.Error()})
 		return
@@ -512,7 +512,7 @@ func VerifyPin(c *gin.Context) {
 //     // Query the database to fetch the user details
 //     var storedUser User
 //     var storedPassword string
-//     row := db.QueryRow("SELECT user_id, fullname, email, phone, password, deleted FROM gollet WHERE email = ? AND deleted = 0 LIMIT 1", newUser.Email)
+//     row := db.QueryRow("SELECT user_id, fullname, email, phone, password, deleted FROM users WHERE email = ? AND deleted = 0 LIMIT 1", newUser.Email)
 //     err = row.Scan(&storedUser.ID, &storedUser.Fullname, &storedUser.Email, &storedUser.Phone, &storedPassword, &storedUser.Deleted)
 //     if err != nil {
 //         response.Status = "error"
@@ -586,7 +586,7 @@ func VerifyPin(c *gin.Context) {
 
 //     // Query the database to verify the previous password
 //     var storedPassword string
-//     err = db.QueryRow("SELECT password FROM gollet WHERE email = ? AND user_id = ? AND deleted = 0", request.Email, request.ID).Scan(&storedPassword)
+//     err = db.QueryRow("SELECT password FROM users WHERE email = ? AND user_id = ? AND deleted = 0", request.Email, request.ID).Scan(&storedPassword)
 //     if err != nil {
 //         response.Status = "error"
 //         response.StatusCode = http.StatusNotFound
@@ -616,7 +616,7 @@ func VerifyPin(c *gin.Context) {
 //     }
 
 //     // Update the password in the database
-//     _, err = db.Exec("UPDATE gollet SET password = ? WHERE user_id = ?", hashedNewPassword, request.ID)
+//     _, err = db.Exec("UPDATE users SET password = ? WHERE user_id = ?", hashedNewPassword, request.ID)
 //     if err != nil {
 //         response.Status = "error"
 //         response.StatusCode = http.StatusInternalServerError
@@ -650,7 +650,7 @@ func VerifyPin(c *gin.Context) {
 
 //     var user User
 //     if request.Email != "" {
-//         err = db.QueryRow("SELECT user_id, email FROM gollet WHERE email = ? AND deleted = 0", request.Email).Scan(&user.ID, &user.Email)
+//         err = db.QueryRow("SELECT user_id, email FROM users WHERE email = ? AND deleted = 0", request.Email).Scan(&user.ID, &user.Email)
 //     }
 
 //     if err != nil {
@@ -662,7 +662,7 @@ func VerifyPin(c *gin.Context) {
 //     }
 
 //     pin := generateRandomPIN()
-//     _, err = db.Exec("UPDATE gollet SET reset_pin = ?, reset_pin_expiry = ?, pin_used = FALSE WHERE user_id = ?", pin, time.Now().Add(15*time.Minute), user.ID)
+//     _, err = db.Exec("UPDATE users SET reset_pin = ?, reset_pin_expiry = ?, pin_used = FALSE WHERE user_id = ?", pin, time.Now().Add(15*time.Minute), user.ID)
 //     if err != nil {
 //         c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to save PIN"})
 //         return
@@ -701,7 +701,7 @@ func VerifyPin(c *gin.Context) {
 //     var expiryStr string
 //     var pinUsed bool
 
-//     err = db.QueryRow("SELECT reset_pin, reset_pin_expiry, pin_used FROM gollet WHERE email = ? AND user_id = ?", request.Email, request.UserID).Scan(&storedPin, &expiryStr, &pinUsed)
+//     err = db.QueryRow("SELECT reset_pin, reset_pin_expiry, pin_used FROM users WHERE email = ? AND user_id = ?", request.Email, request.UserID).Scan(&storedPin, &expiryStr, &pinUsed)
 //     if err != nil {
 //         c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "User not found. Reason: " + err.Error()})
 //         return
@@ -729,7 +729,7 @@ func VerifyPin(c *gin.Context) {
 //         return
 //     }
 
-//     _, err = db.Exec("UPDATE gollet SET password = ?, reset_pin = NULL, reset_pin_expiry = NULL, pin_used = TRUE WHERE user_id = ?", hashedPassword, request.UserID)
+//     _, err = db.Exec("UPDATE users SET password = ?, reset_pin = NULL, reset_pin_expiry = NULL, pin_used = TRUE WHERE user_id = ?", hashedPassword, request.UserID)
 //     if err != nil {
 //         c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to update password. Reason: " + err.Error()})
 //         return

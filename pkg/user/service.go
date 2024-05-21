@@ -101,7 +101,7 @@ func UserRegistration(c *gin.Context) {
 
 	// Check if the email already exists
 	var count int
-	err = db.QueryRow(context.Background(), "SELECT COUNT(*) FROM gollet WHERE email = $1", newUser.Email).Scan(&count)
+	err = db.QueryRow(context.Background(), "SELECT COUNT(*) FROM users WHERE email = $1", newUser.Email).Scan(&count)
 	if err != nil {
 		handleDatabaseError(c, err)
 		return
@@ -123,7 +123,7 @@ func UserRegistration(c *gin.Context) {
 		return
 	}
 
-	query := `INSERT INTO gollet (fullname, email, phone, password) VALUES ($1, $2, $3, $4) RETURNING user_id`
+	query := `INSERT INTO users (fullname, email, phone, password) VALUES ($1, $2, $3, $4) RETURNING user_id`
 	var userID int64
 	err = db.QueryRow(context.Background(), query, newUser.Fullname, newUser.Email, newUser.Phone, hashedPassword).Scan(&userID)
 	if err != nil {
@@ -167,7 +167,7 @@ func FetchSingleUser(c *gin.Context) {
 	userID := c.Param("user_id")
 
 	var newUser User
-	query := `SELECT user_id, fullname, email, phone, deleted FROM gollet WHERE user_id = $1 AND deleted=false LIMIT 1`
+	query := `SELECT user_id, fullname, email, phone, deleted FROM users WHERE user_id = $1 AND deleted=false LIMIT 1`
 	err = db.QueryRow(context.Background(), query, userID).
 		Scan(&newUser.ID, &newUser.Fullname, &newUser.Email, &newUser.Phone, &newUser.Deleted)
 	if err != nil {
@@ -204,7 +204,7 @@ func DoesUserExist(userEmail string) (int, error) {
 	defer db.Close(context.Background())
 
 	var count int
-	query := `SELECT COUNT(*) FROM gollet WHERE email = $1 AND deleted=false`
+	query := `SELECT COUNT(*) FROM users WHERE email = $1 AND deleted=false`
 	err = db.QueryRow(context.Background(), query, userEmail).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count rows: %w", err)
@@ -221,7 +221,7 @@ func DoesUserIdExist(userID int64) (int, error) {
 	defer db.Close(context.Background())
 
 	var count int
-	query := `SELECT COUNT(*) FROM gollet WHERE user_id = $1 AND deleted=false`
+	query := `SELECT COUNT(*) FROM users WHERE user_id = $1 AND deleted=false`
 	err = db.QueryRow(context.Background(), query, userID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count rows: %w", err)
@@ -380,7 +380,7 @@ func validateUserPassword(user User) error {
 // 	}
 // 	defer db.Close()
 
-// 	result, err := db.Exec("INSERT INTO gollet (fullname, email, phone, password) VALUES (?, ?, ?, ?)",
+// 	result, err := db.Exec("INSERT INTO users (fullname, email, phone, password) VALUES (?, ?, ?, ?)",
 // 		newUser.Fullname, newUser.Email, newUser.Phone, hashedPassword)
 // 	if err != nil {
 // 		handleDatabaseError(c, err)
@@ -429,7 +429,7 @@ func validateUserPassword(user User) error {
 // 	userID := c.Param("user_id")
 
 // 	var newUser User
-// 	err = db.QueryRow("SELECT user_id, fullname, email, phone, deleted FROM gollet WHERE user_id = ? AND deleted=0 LIMIT 1", userID).
+// 	err = db.QueryRow("SELECT user_id, fullname, email, phone, deleted FROM users WHERE user_id = ? AND deleted=0 LIMIT 1", userID).
 // 		Scan(&newUser.ID, &newUser.Fullname, &newUser.Email, &newUser.Phone, &newUser.Deleted)
 // 	if err != nil {
 // 		response.Status = "error"
@@ -465,7 +465,7 @@ func validateUserPassword(user User) error {
 // 	defer db.Close()
 
 // 	var count int
-// 	err = db.QueryRow("SELECT COUNT(*) FROM gollet WHERE email = ? AND deleted=0", userEmail).Scan(&count)
+// 	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE email = ? AND deleted=0", userEmail).Scan(&count)
 // 	if err != nil {
 // 		return 0, fmt.Errorf("failed to count rows: %w", err)
 // 	}
@@ -481,7 +481,7 @@ func validateUserPassword(user User) error {
 // 	defer db.Close()
 
 // 	var count int
-// 	err = db.QueryRow("SELECT COUNT(*) FROM gollet WHERE user_id = ? AND deleted=0", userID).Scan(&count)
+// 	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE user_id = ? AND deleted=0", userID).Scan(&count)
 // 	if err != nil {
 // 		return 0, fmt.Errorf("failed to count rows: %w", err)
 // 	}
