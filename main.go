@@ -4,12 +4,19 @@ import (
 	"go_code/pkg/auth"
 	"go_code/pkg/user"
 	"go_code/pkg/wallet"
-
+	"go_code/pkg/transaction"
+	"github.com/joho/godotenv"
 	"github.com/gin-gonic/gin"
 	_ "github.com/jackc/pgx/v4/stdlib" // Import the PostgreSQL driver
 )
 
 func main() {
+	// Load environment variables from .env file
+	err := godotenv.Load()
+	if err != nil {
+		return
+	}
+
 	// Initialize the Gin router
 	application := gin.Default()
 
@@ -27,6 +34,15 @@ func main() {
 	//Wallet API
 	application.POST("/wallet", wallet.CreateCustomerHandler)
 	application.GET("/wallet/:user_id", wallet.ViewWalletHandler)
+
+	// Bank API
+	application.GET("/wallet/banks", wallet.ViewAllBanksHandler)
+
+	// Transactions API
+	application.POST("/transaction/transfer", transaction.FundTransferHandler)
+	
+	application.GET("/customer/:emailOrCode", transaction.GetCustomerHandler)
+	application.GET("/dedicated_account/:dedicatedAccountId", transaction.GetDedicatedAccountHandler)
 
 	// Run the application on port 8081
 	application.Run(":8081")

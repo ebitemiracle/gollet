@@ -59,6 +59,7 @@ type CreateDVAResponse struct {
 		} `json:"customer"`
 		AccountName   string `json:"account_name"`
 		AccountNumber string `json:"account_number"`
+		DVAid int64 `json:"id"`
 	} `json:"data"`
 }
 
@@ -169,8 +170,8 @@ func fetchUserFromDatabase(userID int64) (*Customer, error) {
 
 	// Split the fullname into first and last name (assuming full name is stored in the "fullname" field)
 	names := splitFullName(user.FirstName)
-	user.FirstName = names[0]
-	user.LastName = names[1]
+	user.LastName = names[0]
+	user.FirstName = names[1]
 
 	return &user, nil
 }
@@ -325,10 +326,10 @@ func saveDVAInDatabase(userID int64, dvaData *CreateDVAResponse) error {
 	defer db.Close(context.Background())
 
 	query := `
-		INSERT INTO wallet (user_id, customer_code, bank_name, bank_id, bank_slug, account_name, account_number)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO wallet (user_id, customer_code, bank_name, bank_id, bank_slug, account_name, account_number, dva_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
-	_, err = db.Exec(context.Background(), query, userID, dvaData.Data.Customer.CustomerCode, dvaData.Data.Bank.Name, dvaData.Data.Bank.ID, dvaData.Data.Bank.Slug, dvaData.Data.AccountName, dvaData.Data.AccountNumber)
+	_, err = db.Exec(context.Background(), query, userID, dvaData.Data.Customer.CustomerCode, dvaData.Data.Bank.Name, dvaData.Data.Bank.ID, dvaData.Data.Bank.Slug, dvaData.Data.AccountName, dvaData.Data.AccountNumber, dvaData.Data.DVAid)
 	if err != nil {
 		return err
 	}
@@ -355,6 +356,7 @@ type Wallet struct {
     BankSlug     string `json:"bank_slug"`
     AccountName  string `json:"account_name"`
     AccountNumber string `json:"account_number"`
+    DVAid int64 `json:"dva_id"`
 }
 
 type UserWalletResponse struct {
@@ -416,7 +418,7 @@ func fetchUserAndWallets(userID int64) (*UserWalletResponse, error) {
     }
 
     // Fetch wallet information
-    walletQuery := "SELECT wallet_id, customer_code, bank_name, bank_id, bank_slug, account_name, account_number FROM wallet WHERE user_id = $1"
+    walletQuery := "SELECT wallet_id, customer_code, bank_name, bank_id, bank_slug, account_name, account_number, dva_id FROM wallet WHERE user_id = $1"
     rows, err := db.Query(context.Background(), walletQuery, userID)
     if err != nil {
         return nil, err
@@ -426,7 +428,7 @@ func fetchUserAndWallets(userID int64) (*UserWalletResponse, error) {
     var wallets []Wallet
     for rows.Next() {
         var wallet Wallet
-        err := rows.Scan(&wallet.WalletID, &wallet.CustomerCode, &wallet.BankName, &wallet.BankID, &wallet.BankSlug, &wallet.AccountName, &wallet.AccountNumber)
+        err := rows.Scan(&wallet.WalletID, &wallet.CustomerCode, &wallet.BankName, &wallet.BankID, &wallet.BankSlug, &wallet.AccountName, &wallet.AccountNumber, &wallet.DVAid)
         if err != nil {
             return nil, err
         }
@@ -437,4 +439,104 @@ func fetchUserAndWallets(userID int64) (*UserWalletResponse, error) {
         User:    user,
         Wallets: wallets,
     }, nil
+}
+
+
+
+// View all banks
+// Bank represents the bank data structure
+type Bank struct {
+    Name        string `json:"name"`
+    Slug        string `json:"slug"`
+    Code        string `json:"code"`
+    Longcode    string `json:"longcode"`
+    Gateway     string `json:"gateway,omitempty"`
+    PayWithBank bool   `json:"pay_with_bank"`
+    Active      bool   `json:"active"`
+    IsDeleted   bool   `json:"is_deleted"`
+    Country     string `json:"country"`
+    Currency    string `json:"currency"`
+    Type        string `json:"type"`
+    ID          int    `json:"id"`
+    CreatedAt   string `json:"createdAt"`
+    UpdatedAt   string `json:"updatedAt"`
+}
+
+// PaystackBankResponse represents the response from the Paystack API
+type PaystackBankResponse struct {
+    Status  bool   `json:"status"`
+    Message string `json:"message"`
+    Data    []Bank `json:"data"`
+    Meta    struct {
+        Next     string `json:"next"`
+        Previous string `json:"previous"`
+        PerPage  int    `json:"perPage"`
+    } `json:"meta"`
+}
+
+// ViewAllBanksHandler handles the request to view all banks
+func ViewAllBanksHandler(c *gin.Context) {
+    url := "https://api.paystack.co/bank"
+    authorization := "Bearer " + os.Getenv("PAYSTACK_SECRET_KEY")
+
+    client := &http.Client{}
+    req, err := http.NewRequest("GET", url, nil)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, Response{
+            Status:  "error",
+            Message: "Failed to create request: " + err.Error(),
+        })
+        return
+    }
+    req.Header.Set("Authorization", authorization)
+
+    resp, err := client.Do(req)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, Response{
+            Status:  "error",
+            Message: "Failed to send request: " + err.Error(),
+        })
+        return
+    }
+    defer resp.Body.Close()
+
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, Response{
+            Status:  "error",
+            Message: "Failed to read response: " + err.Error(),
+        })
+        return
+    }
+
+    if resp.StatusCode != http.StatusOK {
+        c.JSON(http.StatusInternalServerError, Response{
+            Status:  "error",
+            Message: "Failed to retrieve banks: " + string(body),
+        })
+        return
+    }
+
+    var paystackResponse PaystackBankResponse
+    if err := json.Unmarshal(body, &paystackResponse); err != nil {
+        c.JSON(http.StatusInternalServerError, Response{
+            Status:  "error",
+            Message: "Failed to parse response: " + err.Error(),
+        })
+        return
+    }
+
+    if !paystackResponse.Status {
+        c.JSON(http.StatusInternalServerError, Response{
+            Status:  "error",
+            Message: "Failed to retrieve banks: " + paystackResponse.Message,
+        })
+        return
+    }
+
+    c.JSON(http.StatusOK, Response{
+        Status:  "success",
+        Message: "Banks retrieved successfully",
+        Result:  paystackResponse.Data,
+    })
 }
