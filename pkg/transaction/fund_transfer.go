@@ -51,11 +51,11 @@ type TransferRecipientResponse struct {
 
 // InitiateTransfer represents the payload for initiating a transfer
 type InitiateTransfer struct {
-	UserID    int    `json:"user_id"`
-	Source    string `json:"source"`
-	Reason    string `json:"reason"`
-	Amount    float64  `json:"amount"`
-	Recipient string `json:"recipient"`
+	UserID    int     `json:"user_id"`
+	Source    string  `json:"source"`
+	Reason    string  `json:"reason"`
+	Amount    float64 `json:"amount"`
+	Recipient string  `json:"recipient"`
 }
 
 // InitiateTransferResponse represents the response from the Paystack API for initiating a transfer
@@ -63,9 +63,9 @@ type InitiateTransferResponse struct {
 	Status  bool   `json:"status"`
 	Message string `json:"message"`
 	Data    struct {
-		TransferCode       string          `json:"transfer_code"`
-		TransferReference  string          `json:"reference"`
-		Recipient          json.RawMessage `json:"recipient"` // Keeping as json.RawMessage to parse dynamically later
+		TransferCode      string      `json:"transfer_code"`
+		TransferReference string      `json:"reference"`
+		Recipient         interface{} `json:"recipient"` // Changed to interface{} to handle different types
 	} `json:"data"`
 }
 
@@ -74,7 +74,12 @@ type VerifyTransferResponse struct {
 	Status  bool   `json:"status"`
 	Message string `json:"message"`
 	Data    struct {
-		Status string `json:"status"`
+		Status    string `json:"status"`
+		Recipient struct {
+			Details struct {
+				BankName string `json:"bank_name"`
+			} `json:"details"`
+		} `json:"recipient"`
 	} `json:"data"`
 }
 
@@ -94,201 +99,48 @@ func FundTransferHandler(c *gin.Context) {
 		return
 	}
 
-	// Step 1: Resolve the bank account information
-	resolveURL := fmt.Sprintf("https://api.paystack.co/bank/resolve?account_number=%s&bank_code=%s", fundTransfer.AccountNumber, fundTransfer.BankCode)
-	authorization := "Bearer " + os.Getenv("PAYSTACK_SECRET_KEY")
-
-	req, err := http.NewRequest("GET", resolveURL, nil)
+	// Resolve the bank account information
+	accountName, err := resolveBankAccount(fundTransfer)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Status:  "error",
-			Message: "Failed to create request: " + err.Error(),
+			Message: err.Error(),
 		})
 		return
 	}
-	req.Header.Set("Authorization", authorization)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// Create transfer recipient
+	recipientCode, err := createTransferRecipient(fundTransfer, accountName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Status:  "error",
-			Message: "Failed to send request: " + err.Error(),
+			Message: err.Error(),
 		})
 		return
 	}
-	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	// Initiate the transfer
+	transferCode, reference, err := initiateTransfer(fundTransfer, recipientCode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Status:  "error",
-			Message: "Failed to read response: " + err.Error(),
+			Message: err.Error(),
 		})
 		return
 	}
 
-	var resolveResponse ResolveBankAccountResponse
-	if err := json.Unmarshal(body, &resolveResponse); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to parse response: " + err.Error(),
-			Result:  json.RawMessage(body),
-		})
-		return
-	}
-
-	if !resolveResponse.Status {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to resolve bank account: " + resolveResponse.Message,
-			Result:  resolveResponse,
-		})
-		return
-	}
-
-	accountName := resolveResponse.Data.AccountName
-	bank := fundTransfer.BankCode
-
-	// Step 2: Use the resolved information to create a transfer recipient
-	recipientCreateURL := "https://api.paystack.co/transferrecipient"
-	recipientData := map[string]string{
-		"type":           "nuban",
-		"name":           resolveResponse.Data.AccountName,
-		"account_number": resolveResponse.Data.AccountNumber,
-		"bank_code":      fundTransfer.BankCode,
-		"currency":       "NGN",
-	}
-	recipientDataJSON, err := json.Marshal(recipientData)
+	// Verify the transfer
+	bankName, err := verifyTransfer(reference)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Status:  "error",
-			Message: "Failed to marshal JSON: " + err.Error(),
-		})
-		return
-	}
-
-	req, err = http.NewRequest("POST", recipientCreateURL, bytes.NewBuffer(recipientDataJSON))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to create request: " + err.Error(),
-		})
-		return
-	}
-	req.Header.Set("Authorization", authorization)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to send request: " + err.Error(),
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to read response: " + err.Error(),
-		})
-		return
-	}
-
-	var transferRecipientResponse TransferRecipientResponse
-	if err := json.Unmarshal(body, &transferRecipientResponse); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to parse response: " + err.Error(),
-			Result:  json.RawMessage(body),
-		})
-		return
-	}
-
-	if !transferRecipientResponse.Status {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to create transfer recipient: " + transferRecipientResponse.Message,
-			Result:  transferRecipientResponse,
-		})
-		return
-	}
-
-	recipientCode := transferRecipientResponse.Data.RecipientCode
-
-	// Step 3: Initiate the transfer
-	initiateTransferURL := "https://api.paystack.co/transfer"
-	transferData := InitiateTransfer{
-		UserID:    fundTransfer.UserID,
-		Source:    fundTransfer.Source,
-		Reason:    fundTransfer.Reason,
-		Amount:    fundTransfer.Amount * 100.00, // Convert Naira to Kobo
-		Recipient: recipientCode,
-	}
-	transferDataJSON, err := json.Marshal(transferData)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to marshal JSON: " + err.Error(),
-		})
-		return
-	}
-
-	req, err = http.NewRequest("POST", initiateTransferURL, bytes.NewBuffer(transferDataJSON))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to create request: " + err.Error(),
-		})
-		return
-	}
-	req.Header.Set("Authorization", authorization)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to send request: " + err.Error(),
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to read response: " + err.Error(),
-		})
-		return
-	}
-
-	var initiateTransferResponse InitiateTransferResponse
-	if err := json.Unmarshal(body, &initiateTransferResponse); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to parse response: " + err.Error(),
-			Result:  json.RawMessage(body),
-		})
-		return
-	}
-
-	if !initiateTransferResponse.Status {
-		c.JSON(http.StatusInternalServerError, Response{
-			Status:  "error",
-			Message: "Failed to initiate transfer: " + initiateTransferResponse.Message,
-			Result:  initiateTransferResponse,
+			Message: "Failed to verify transfer: " + err.Error(),
 		})
 		return
 	}
 
 	// Save the transfer data in the database
-	transferCode := initiateTransferResponse.Data.TransferCode
-	if err := saveTransferDataInDatabase(fundTransfer.UserID, recipientCode, transferCode, accountName, bank); err != nil {
+	if err := saveTransferDataInDatabase(fundTransfer.UserID, recipientCode, transferCode, accountName, bankName, fundTransfer.BankCode); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Status:  "error",
 			Message: "Failed to save transfer data: " + err.Error(),
@@ -296,20 +148,9 @@ func FundTransferHandler(c *gin.Context) {
 		return
 	}
 
-	finalResult := map[string]interface{}{
-		"verify_transfer_response": initiateTransferResponse.Data,
-		// "recipient_details":        recipientDetails,
-	}
-
-	finalStatus := "success"
-	if !initiateTransferResponse.Status {
-		finalStatus = "error"
-	}
-
 	c.JSON(http.StatusOK, Response{
-		Status:  finalStatus,
-		Message: "Fund transfer process completed",
-		Result:  finalResult,
+		Status:  "success",
+		Message: "Fund transfer process completed and verified",
 	})
 }
 
@@ -347,19 +188,204 @@ func checkBalanceAndProceed(c *gin.Context, fundTransfer FundTransfer) error {
 	return nil
 }
 
-// saveTransferDataInDatabase saves transfer data in the database
-func saveTransferDataInDatabase(userID int, recipientCode, transferCode, accountName, bank string) error {
+// resolveBankAccount resolves the bank account information using the Paystack API
+func resolveBankAccount(fundTransfer FundTransfer) (string, error) {
+	resolveURL := fmt.Sprintf("https://api.paystack.co/bank/resolve?account_number=%s&bank_code=%s", fundTransfer.AccountNumber, fundTransfer.BankCode)
+	authorization := "Bearer " + os.Getenv("PAYSTACK_SECRET_KEY")
+
+	req, err := http.NewRequest("GET", resolveURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("Failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", authorization)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("Failed to read response: %w", err)
+	}
+
+	var resolveResponse ResolveBankAccountResponse
+	if err := json.Unmarshal(body, &resolveResponse); err != nil {
+		return "", fmt.Errorf("Failed to parse response: %w", err)
+	}
+
+	if !resolveResponse.Status {
+		return "", fmt.Errorf("Failed to resolve bank account: %s", resolveResponse.Message)
+	}
+
+	return resolveResponse.Data.AccountName, nil
+}
+
+// createTransferRecipient creates a transfer recipient using the Paystack API
+func createTransferRecipient(fundTransfer FundTransfer, accountName string) (string, error) {
+	recipientCreateURL := "https://api.paystack.co/transferrecipient"
+	recipientData := map[string]string{
+		"type":           "nuban",
+		"name":           accountName,
+		"account_number": fundTransfer.AccountNumber,
+		"bank_code":      fundTransfer.BankCode,
+		"currency":       "NGN",
+	}
+	recipientDataJSON, err := json.Marshal(recipientData)
+	if err != nil {
+		return "", fmt.Errorf("Failed to marshal JSON: %w", err)
+	}
+
+	authorization := "Bearer " + os.Getenv("PAYSTACK_SECRET_KEY")
+	req, err := http.NewRequest("POST", recipientCreateURL, bytes.NewBuffer(recipientDataJSON))
+	if err != nil {
+		return "", fmt.Errorf("Failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("Failed to read response: %w", err)
+	}
+
+	var transferRecipientResponse TransferRecipientResponse
+	if err := json.Unmarshal(body, &transferRecipientResponse); err != nil {
+		return "", fmt.Errorf("Failed to parse response: %w", err)
+	}
+
+	if !transferRecipientResponse.Status {
+		return "", fmt.Errorf("Failed to create transfer recipient: %s", transferRecipientResponse.Message)
+	}
+
+	return transferRecipientResponse.Data.RecipientCode, nil
+}
+
+// initiateTransfer initiates the transfer using the Paystack API
+func initiateTransfer(fundTransfer FundTransfer, recipientCode string) (string, string, error) {
+	initiateTransferURL := "https://api.paystack.co/transfer"
+	transferData := struct {
+		Source    string  `json:"source"`
+		Reason    string  `json:"reason"`
+		Amount    float64 `json:"amount"`
+		Recipient string  `json:"recipient"`
+	}{
+		Source:    fundTransfer.Source,
+		Reason:    fundTransfer.Reason,
+		Amount:    fundTransfer.Amount * 100, // Convert Naira to Kobo
+		Recipient: recipientCode,
+	}
+	transferDataJSON, err := json.Marshal(transferData)
+	if err != nil {
+		return "", "", fmt.Errorf("Failed to marshal JSON: %w", err)
+	}
+
+	authorization := "Bearer " + os.Getenv("PAYSTACK_SECRET_KEY")
+	req, err := http.NewRequest("POST", initiateTransferURL, bytes.NewBuffer(transferDataJSON))
+	if err != nil {
+		return "", "", fmt.Errorf("Failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("Failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("Failed to read response: %w", err)
+	}
+
+	// Log the actual response body for debugging
+	fmt.Println("Response Body:", string(body))
+
+	var initiateTransferResponse InitiateTransferResponse
+	if err := json.Unmarshal(body, &initiateTransferResponse); err != nil {
+		return "", "", fmt.Errorf("Failed to parse response: %w", err)
+	}
+
+	if !initiateTransferResponse.Status {
+		return "", "", fmt.Errorf("Failed to initiate transfer: %s", initiateTransferResponse.Message)
+	}
+
+	// Handle the recipient data based on its type
+	switch recipient := initiateTransferResponse.Data.Recipient.(type) {
+	case float64:
+		// Recipient is an ID
+		fmt.Printf("Recipient ID: %v\n", recipient)
+	case map[string]interface{}:
+		// Recipient is a detailed object
+		fmt.Printf("Recipient Data: %+v\n", recipient)
+	default:
+		return "", "", fmt.Errorf("Unexpected recipient type: %T", recipient)
+	}
+
+	return initiateTransferResponse.Data.TransferCode, initiateTransferResponse.Data.TransferReference, nil
+}
+
+// verifyTransfer verifies the transfer using the Paystack API
+func verifyTransfer(reference string) (string, error) {
+	verifyTransferURL := fmt.Sprintf("https://api.paystack.co/transfer/verify/%s", reference)
+	authorization := "Bearer " + os.Getenv("PAYSTACK_SECRET_KEY")
+
+	req, err := http.NewRequest("GET", verifyTransferURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("Failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", authorization)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("Failed to read response: %w", err)
+	}
+
+	var verifyTransferResponse VerifyTransferResponse
+	if err := json.Unmarshal(body, &verifyTransferResponse); err != nil {
+		return "", fmt.Errorf("Failed to parse response: %w", err)
+	}
+
+	if !verifyTransferResponse.Status {
+		return "", fmt.Errorf("Failed to verify transfer: %s", verifyTransferResponse.Message)
+	}
+
+	return verifyTransferResponse.Data.Recipient.Details.BankName, nil
+}
+
+// saveTransferDataInDatabase saves the transfer data in the database
+func saveTransferDataInDatabase(userID int, recipientCode, transferCode, accountName, bankName, bankCode string) error {
 	db, err := database.PostgreSQLConnect()
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("Failed to connect to database: %w", err)
 	}
 	defer db.Close(context.Background())
 
-	_, err = db.Exec(context.Background(),
-		"INSERT INTO user_transaction (user_id, recipient_code, transfer_code, transaction_type, account_name, bank) VALUES ($1, $2, $3, $4, $5, $6)",
-		userID, recipientCode, transferCode, "debit", accountName, bank)
+	sqlStatement := `
+		INSERT INTO user_transaction (user_id, recipient_code, transfer_code, account_name, bank_name, bank_code, transaction_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+	_, err = db.Exec(context.Background(), sqlStatement, userID, recipientCode, transferCode, accountName, bankName, bankCode, "debit")
 	if err != nil {
-		return fmt.Errorf("failed to insert transfer data: %w", err)
+		return fmt.Errorf("Failed to save transfer data: %w", err)
 	}
 
 	return nil
